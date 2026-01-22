@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>준우 브라우저</title>
+<style>
+body, input, button { font-family: 'RoughlyWrittenJunwoo', sans-serif !important; margin:0; padding:0; }
+#toolbar { display:flex; padding:5px; background:#eee; align-items:center; }
+#tabs { display:flex; background:#ccc; padding:5px; overflow-x:auto; }
+.tab { display:flex; align-items:center; padding:5px 10px; background:#ddd; margin:2px; cursor:pointer; user-select:none; }
+.tab.active { background:#fff; font-weight:bold; }
+.tab .close { margin-left:5px; cursor:pointer; font-weight:bold; }
+iframe { width:100%; height:calc(100vh - 120px); border:none; }
+#bookmarks { position:fixed; top:50px; right:10px; background:#fff; border:1px solid #aaa; padding:5px; display:none; max-height:300px; overflow-y:auto; }
+#bookmarks div { padding:3px; cursor:pointer; }
+.tab-group { display:flex; flex-direction:column; border:2px solid #888; padding:2px; margin-right:5px; min-width:150px; }
+.tab-group.active { border-color:#555; }
+.tab-group-header { display:flex; justify-content:space-between; align-items:center; background:#bbb; padding:2px; cursor:grab; }
+.tab-group-header input { width:70%; }
+.tab-group-header button { margin-left:2px; }
+</style>
+</head>
+<body>
+
+<div id="toolbar">
+    <button id="back">◀</button>
+    <button id="forward">▶</button>
+    <button id="refresh">⟳</button>
+    <button id="home">🏠</button>
+    <input type="text" id="url" placeholder="URL 또는 검색어 입력" style="flex:1; margin:0 5px;">
+    <button id="go">검색</button>
+    <button id="newTab">+ 새 탭</button>
+    <button id="newGroup">📁 새 그룹</button>
+    <button id="bookmarkBtn">★ 즐겨찾기</button>
+    <button id="shareBtn">🔗 공유</button>
+    <button id="saveStateBtn">💾 저장</button>
+</div>
+
+<div id="tabs"></div>
+<div id="content"></div>
+<div id="bookmarks"></div>
+
+<script>
+const fs = require('fs');
+const path = require('path');
+const bookmarkFile = path.join(__dirname,'bookmarks.json');
+const tabFile = path.join(__dirname,'tabs.json');
+
+let tabs = [];
+let groups = [];
+let currentTab = 0;
+let bookmarks = [];
+
+@font-face {
+    font-family: 'RoughlyWrittenJunwoo';
+    src: url('https://cdn.jsdelivr.net/gh/projectnoonnu/2601-4@1.1/RFjunwooo.woff2') format('woff2');
+    font-weight: normal;
+    font-display: swap;
+}
+
+// ---------------- 북마크 ----------------
+function loadBookmarks(){ if(fs.existsSync(bookmarkFile)) bookmarks=JSON.parse(fs.readFileSync(bookmarkFile)); renderBookmarks();}
+function saveBookmarks(){ fs.writeFileSync(bookmarkFile,JSON.stringify(bookmarks,null,2)); }
+function renderBookmarks(){
+    const c=document.getElementById('bookmarks'); c.innerHTML=''; bookmarks.forEach(b=>{ const d=document.createElement('div'); d.innerText=b.title; d.onclick=()=>navigate(b.url); c.appendChild(d); }); c.style.display=bookmarks.length?'block':'none';
+}
+
+// ---------------- 탭/그룹 ----------------
+function loadTabs(){
+    if(fs.existsSync(tabFile)){
+        const savedTabs=JSON.parse(fs.readFileSync(tabFile));
+        savedTabs.forEach(t=>createTab(t.url,t.title,t.group));
+    }else createTab();
+}
+function saveTabs(){
+    const saveData=tabs.map(t=>({url:t.iframe.src,title:t.tabBtn.querySelector('.title').innerText,group:t.group}));
+    fs.writeFileSync(tabFile,JSON.stringify(saveData,null,2));
+}
+
+function createGroup(name='새 그룹', color='#bbb'){
+    const id=groups.length;
+    const g={id,name,color,tabs:[]};
+    groups.push(g); renderGroups(); return g;
+}
+function renderGroups(){
+    const container=document.getElementById('tabs'); container.innerHTML='';
+    groups.forEach(g=>{
+        const gDiv=document.createElement('div'); gDiv.className='tab-group'; gDiv.style.borderColor=g.color;
+        const header=document.createElement('div'); header.className='tab-group-header';
+        const input=document.createElement('input'); input.value=g.name;
+        input.onchange=()=>{ g.name=input.value; renderGroups(); }
+        const colorBtn=document.createElement('button'); colorBtn.innerText='🎨'; colorBtn.onclick=()=>{ const c=prompt('색상코드','#888'); if(c) g.color=c; renderGroups(); }
+        const closeBtn=document.createElement('button'); closeBtn.innerText='✖'; closeBtn.onclick=()=>{ g.tabs.forEach(t=>closeTab(t)); groups=groups.filter(x=>x!==g); renderGroups(); }
+        header.appendChild(input); header.appendChild(colorBtn); header.appendChild(closeBtn);
+        gDiv.appendChild(header);
+        g.tabs.forEach(t=>gDiv.appendChild(t.tabBtn));
+        container.appendChild(gDiv);
+    });
+}
+
+function createTab(url='https://www.google.com', title='새 탭', groupId=null){
+    const tabId=tabs.length;
+    const iframe=document.createElement('iframe'); iframe.src=url;
+    const tabBtn=document.createElement('div'); tabBtn.className='tab'; tabBtn.innerHTML=`<span class="title">${title}</span><span class="close">×</span>`; tabBtn.draggable=true;
+    tabBtn.onclick=(e)=>{ if(e.target.classList.contains('close')) return; switchTab(tabId); }
+    tabBtn.querySelector('.close').onclick=(e)=>{ e.stopPropagation(); closeTab(tabs[tabId]); }
+    tabBtn.querySelector('.title').ondblclick=()=>{ const n=prompt('탭 이름',tabBtn.querySelector('.title').innerText); if(n) tabBtn.querySelector('.title').innerText=n; }
+    tabBtn.addEventListener('dragstart', e=>{ e.dataTransfer.setData('text/plain',tabId); });
+    tabBtn.addEventListener('dragover', e=>e.preventDefault());
+    tabBtn.addEventListener('drop', e=>{ const from=+e.dataTransfer.getData('text/plain'); [tabs[from],tabs[tabId]]=[tabs[tabId],tabs[from]]; renderGroups(); });
+
+    const tabObj={iframe, tabBtn, group:groupId};
+    tabs.push(tabObj);
+    document.getElementById('content').appendChild(iframe);
+    if(groupId!==null){
+        let g=groups.find(x=>x.id===groupId); if(!g) g=createGroup(); g.tabs.push(tabObj);
+    }
+    renderGroups(); switchTab(tabId);
+}
+
+function switchTab(id){ tabs.forEach((t,i)=>{ t.iframe.style.display=i===id?'block':'none'; t.tabBtn.classList.toggle('active',i===id); }); currentTab=id; document.getElementById('url').value=tabs[id].iframe.src; }
+function closeTab(tabObj){ tabObj.iframe.remove(); tabObj.tabBtn.remove(); tabs=tabs.filter(t=>t!==tabObj); groups.forEach(g=>g.tabs=g.tabs.filter(t=>t!==tabObj)); renderGroups(); if(tabs.length>0)switchTab(0); }
+function navigate(url){ if(!url.startsWith('http')) url='https://www.google.com/search?q='+encodeURIComponent(url); tabs[currentTab].iframe.src=url; }
+
+// ---------------- 버튼 이벤트 ----------------
+document.getElementById('go').onclick=()=>navigate(document.getElementById('url').value);
+document.getElementById('url').onkeydown=(e)=>{ if(e.key==='Enter') navigate(e.target.value); };
+document.getElementById('back').onclick=()=>tabs[currentTab].iframe.contentWindow.history.back();
+document.getElementById('forward').onclick=()=>tabs[currentTab].iframe.contentWindow.history.forward();
+document.getElementById('refresh').onclick=()=>tabs[currentTab].iframe.contentWindow.location.reload();
+document.getElementById('home').onclick=()=>navigate('https://www.google.com');
+document.getElementById('newTab').onclick=()=>createTab();
+document.getElementById('newGroup').onclick=()=>createGroup();
+document.getElementById('bookmarkBtn').onclick=()=>{ const url=tabs[currentTab].iframe.src; const title=tabs[currentTab].tabBtn.querySelector('.title').innerText; if(!bookmarks.find(b=>b.url===url)) bookmarks.push({url,title}); renderBookmarks(); saveBookmarks(); }
+document.getElementById('shareBtn').onclick=()=>{ navigator.clipboard.writeText(tabs[currentTab].iframe.src); alert('URL 복사됨'); }
+document.getElementById('saveStateBtn').onclick=()=>saveTabs();
+
+// 초기화
+loadBookmarks();
+loadTabs();
+</script>
+</body>
+</html>
